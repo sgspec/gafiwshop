@@ -30,40 +30,27 @@ function tryParseJSON(text) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-/* ---------- STREAM PRODUCTS (read-only) ---------- */
-app.get("/api/gafiw-products", async (_req, res) => {
-  try {
-    const { ok, status, text } = await fetchText(
-      "https://gafiwshop.xyz/api/api_product",
-      {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
-          "Accept": "application/json,text/plain,*/*",
-        },
-      }
-    );
-    const data = tryParseJSON(text);
-
-    if (!ok) {
-      return res.status(502).json({
-        error: "upstream_status_" + status,
-        sample: text.slice(0, 200),
-      });
-    }
-    if (!Array.isArray(data)) {
-      return res.status(502).json({
-        error: "bad_format",
-        sample: text.slice(0, 200),
-      });
-    }
-    res.set("Cache-Control", "no-store");
-    return res.json(data);
-  } catch (e) {
-    console.error("[products]", e);
-    return res.status(502).json({ error: "upstream_failed" });
+// ----- STREAM PRODUCTS (read-only) -----
+async function getProductsFresh() {
+  const headers = {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+    "Accept": "application/json,text/plain,*/*",
+    "Accept-Language": "th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://gafiwshop.xyz/",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache"
+  };
+  let last = null;
+  for (let i = 0; i < 2; i++) {
+    const r = await fetchText("https://gafiwshop.xyz/api/api_product", { headers });
+    const data = (() => { try { return JSON.parse(r.text); } catch { return null; } })();
+    if (r.ok && Array.isArray(data)) return { ok: true, data };
+    last = r;
+    await new Promise(r => setTimeout(r, 800));
   }
-});
+  return { ok: false, last };
+}
 
 /* ---------- OTP LIST ---------- */
 app.get("/api/gafiw-otp", async (_req, res) => {
