@@ -18,3 +18,19 @@ app.get("/api/gafiw-products", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Proxy API running on ${PORT}`));
+
+// เพิ่มต่อจาก /api/gafiw-products
+app.get("/api/gafiw-otp", async (req, res) => {
+  try {
+    const r = await fetch("https://gafiwshop.xyz/api/otp_product", {
+      headers: { "User-Agent": "AF-Catalog/1.0" }
+    });
+    const data = await r.json();
+    res.set("Access-Control-Allow-Origin", "*");
+    res.json(data);
+  } catch (e) {
+    console.error(e);
+    res.status(502).json({ error: "upstream_failed" });
+  }
+});
+
