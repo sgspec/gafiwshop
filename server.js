@@ -1,83 +1,178 @@
-// server.js  (Node 18+, "type":"module")
-import express from "express";
-import fetch from "node-fetch";
+// server.js
+// Node 18+ (มี global fetch), Express 4+
+// API proxy สำหรับหน้าเว็บ (อ่านอย่างเดียว + ซ่อน key), และเสิร์ฟไฟล์จาก public/
+
+const express = require("express");
+const cors = require("cors");
+const path = require("path");
 
 const app = express();
-app.use(express.urlencoded({ extended: true }));
+const PORT = process.env.PORT || 3000;
+const KEY = process.env.GAFIW_API_KEY || ""; // ใช้สำหรับ OTP / history
+
+app.use(cors()); // เปิด CORS ให้หน้าเว็บทุกโดเมนเรียกได้
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// CORS
-app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-  next();
-});
-
-const KEY = process.env.GAFIW_API_KEY || ""; // <-- ตั้งใน Render
-
-async function fetchJSON(url, init={}, timeoutMs=10000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
+/* ---------- Helper: fetch with timeout + JSON safe parse ---------- */
+async function fetchText(url, opts = {}, timeoutMs = 15000) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const r = await fetch(url, { ...init, signal: controller.signal, headers: { "User-Agent": "AF-Catalog/1.0 (+render)", ...(init.headers||{}) }});
-    if (!r.ok) throw new Error(`Upstream ${r.status} ${r.statusText}`);
-    return await r.json();
-  } finally { clearTimeout(id); }
+    const r = await fetch(url, { signal: ctrl.signal, ...opts });
+    const text = await r.text();
+    return { ok: r.ok, status: r.status, text };
+  } finally {
+    clearTimeout(id);
+  }
+}
+function tryParseJSON(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
-// Health
-app.get("/", (_req, res) => res.type("text/plain").send("gafiwshop proxy running"));
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
-
-// ----- Streaming products (ไม่ใช้ key) -----
+/* ---------- STREAM PRODUCTS (read-only) ---------- */
+// GET /api/gafiw-products -> แปลง/คืนเป็น array เสมอ
 app.get("/api/gafiw-products", async (_req, res) => {
   try {
-    const data = await fetchJSON("https://gafiwshop.xyz/api/api_product");
-    res.set("Cache-Control", "public, max-age=60");
-    res.json(Array.isArray(data) ? data : []);
+    const { ok, status, text } = await fetchText(
+      "https://gafiwshop.xyz/api/api_product",
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+          Accept: "application/json,text/plain,*/*",
+        },
+      }
+    );
+
+    const data = tryParseJSON(text);
+
+    if (!ok) {
+      return res
+        .status(502)
+        .json({ error: "upstream_status_" + status, sample: text.slice(0, 200) });
+    }
+    if (!Array.isArray(data)) {
+      // ป้องกันกรณีร้านตอบ {} หรือ html
+      return res
+        .status(502)
+        .json({ error: "bad_format", sample: text.slice(0, 200) });
+    }
+
+    res.set("Cache-Control", "no-store");
+    return res.json(data);
   } catch (e) {
-    console.error("[products]", e.message);
-    res.status(502).json({ error: "upstream_failed" });
+    console.error("[products]", e);
+    return res.status(502).json({ error: "upstream_failed" });
   }
 });
 
-// ----- OTP products (ต้องใช้ key) -----
+/* ---------- OTP LIST ---------- */
+// GET /api/gafiw-otp -> ต้องมี KEY, คืน array (data หรือ data.data)
 app.get("/api/gafiw-otp", async (_req, res) => {
   try {
     if (!KEY) return res.status(500).json({ error: "missing_key" });
-    const url = `https://gafiwshop.xyz/api/otp_product?keyapi=${encodeURIComponent(KEY)}`;
-    const data = await fetchJSON(url);
-    res.set("Cache-Control", "public, max-age=60");
-    res.json(Array.isArray(data) ? data : data); // เผื่อบางวันส่งเป็น object
+    const url = `https://gafiwshop.xyz/api/otp_product?keyapi=${encodeURIComponent(
+      KEY
+    )}`;
+    const { ok, status, text } = await fetchText(url);
+    const data = tryParseJSON(text);
+
+    if (!ok) {
+      return res
+        .status(502)
+        .json({ error: "upstream_status_" + status, sample: text.slice(0, 200) });
+    }
+    const list = Array.isArray(data) ? data : data?.data;
+    if (!Array.isArray(list)) {
+      return res
+        .status(502)
+        .json({ error: "bad_format", sample: text.slice(0, 200) });
+    }
+
+    res.set("Cache-Control", "no-store");
+    return res.json(list);
   } catch (e) {
-    console.error("[otp products]", e.message);
-    res.status(502).json({ error: "upstream_failed" });
+    console.error("[otp]", e);
+    return res.status(502).json({ error: "upstream_failed" });
   }
 });
 
-// ----- OTP count (ต้องใช้ product + location) -----
+/* ---------- OTP COUNT ---------- */
+// GET /api/gafiw-otp-count?product=Google&location=Thailand
 app.get("/api/gafiw-otp-count", async (req, res) => {
   try {
     const { product, location } = req.query;
-    if (!product || !location) return res.status(400).json({ error: "missing_params", need: ["product","location"] });
+    if (!product || !location)
+      return res.status(400).json({ error: "missing_params" });
+
     const form = new URLSearchParams({ product, location });
-    const data = await fetchJSON("https://gafiwshop.xyz/api/otp_count", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form.toString()
-    });
+    const { ok, status, text } = await fetchText(
+      "https://gafiwshop.xyz/api/otp_count",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: form.toString(),
+      }
+    );
+    const data = tryParseJSON(text);
+
+    if (!ok) {
+      return res
+        .status(502)
+        .json({ error: "upstream_status_" + status, sample: text.slice(0, 200) });
+    }
     res.set("Cache-Control", "no-store");
-    res.json(data); // {"status":"success","count":"..."}
+    return res.json(data ?? { error: "bad_format", sample: text.slice(0, 200) });
   } catch (e) {
-    console.error("[otp count]", e.message);
-    res.status(502).json({ error: "upstream_failed" });
+    console.error("[otp_count]", e);
+    return res.status(502).json({ error: "upstream_failed" });
   }
 });
 
-// 404
-app.use((_req, res) => res.status(404).json({ error: "not_found" }));
+/* ---------- HISTORY (บัญชี/ลูกค้า) ---------- */
+// GET /api/gafiw-history?limit=10&username_buy=abc
+app.get("/api/gafiw-history", async (req, res) => {
+  try {
+    if (!KEY) return res.status(500).json({ error: "missing_key" });
+    const qs = new URLSearchParams({ keyapi: KEY });
+    if (req.query.username_buy) qs.set("username_buy", req.query.username_buy);
+    if (req.query.limit) qs.set("Limit", req.query.limit); // 'all' หรือไม่ระบุ
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Proxy running on :${PORT}`));
+    const url = `https://gafiwshop.xyz/api/api_history?${qs.toString()}`;
+    const { ok, status, text } = await fetchText(url);
+    const data = tryParseJSON(text);
+
+    if (!ok) {
+      return res
+        .status(502)
+        .json({ error: "upstream_status_" + status, sample: text.slice(0, 200) });
+    }
+    res.set("Cache-Control", "no-store");
+    return res.json(Array.isArray(data) ? data : []);
+  } catch (e) {
+    console.error("[history]", e);
+    return res.status(502).json({ error: "upstream_failed" });
+  }
+});
+
+/* ---------- Health check ---------- */
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true, time: new Date().toISOString() });
+});
+
+/* ---------- Static files (public/) ---------- */
+const publicDir = path.join(__dirname, "public");
+app.use(express.static(publicDir));
+app.get("*", (_req, res) =>
+  res.sendFile(path.join(publicDir, "index.html"))
+);
+
+/* ---------- Start ---------- */
+app.listen(PORT, () => {
+  console.log("listening on :" + PORT);
+});
