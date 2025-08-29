@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IDmart • TEST API</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#0b1220; color:#e5e7eb; }
+  header { position:sticky; top:0; background:#0f172a; padding:12px 16px; border-bottom:1px solid #1f2937; }
+  h1 { margin:0; font-size:18px; }
+  main { padding:16px; display:grid; gap:12px; max-width:900px; margin:0 auto; }
+  .row { display:grid; gap:8px; }
+  .card { background:#111827; border:1px solid #1f2937; border-radius:12px; padding:12px; }
+  .btn { appearance:none; border:0; border-radius:10px; padding:12px 14px; font-weight:600; background:#22d3ee; color:#0a0f1e; }
+  .btn:active { transform: translateY(1px); }
+  .grid { display:grid; gap:8px; grid-template-columns:1fr 1fr; }
+  label { font-size:12px; color:#94a3b8; }
+  input, select { width:100%; padding:10px 12px; border-radius:10px; border:1px solid #1f2937; background:#0b1220; color:#e5e7eb; }
+  pre { white-space:pre-wrap; word-break:break-word; margin:0; max-height:55vh; overflow:auto; }
+  .muted { color:#9ca3af; font-size:12px; }
+  a.link { color:#93c5fd; text-decoration: none; }
+</style>
+</head>
+<body>
+<header><h1>🧪 IDmart • API Test</h1></header>
+<main>
+
+  <div class="card row">
+    <div class="grid">
+      <button class="btn" id="btnHealth">/api/health</button>
+      <button class="btn" id="btnProducts">/api/gafiw-products?fresh=1</button>
+    </div>
+    <div class="grid">
+      <button class="btn" id="btnOtp">/api/gafiw-otp</button>
+      <button class="btn" id="btnHistory">/api/gafiw-history?limit=5</button>
+    </div>
+
+    <div class="row">
+      <label>เช็กจำนวน OTP</label>
+      <div class="grid">
+        <input id="product" placeholder="product เช่น Google" value="Google">
+        <input id="location" placeholder="location เช่น Thailand" value="Thailand">
+      </div>
+      <button class="btn" id="btnCount">/api/gafiw-otp-count</button>
+    </div>
+
+    <div class="muted">* ทุกปุ่มจะเรียก API ผ่านโดเมนของคุณเอง (relative path)</div>
+  </div>
+
+  <div class="card row">
+    <label>ผลลัพธ์</label>
+    <pre id="out">ยังไม่มีผลลัพธ์</pre>
+  </div>
+
+  <div class="card row">
+    <a class="btn" href="https://gg-app.link/gafiwshop" target="_blank" rel="nofollow noopener">ไปหน้าซื้อ (AF)</a>
+    <div class="muted">หากเจอปัญหา ให้แคปผลในกล่องผลลัพธ์ส่งมาได้เลย</div>
+  </div>
+
+</main>
+
+<script>
+const out = document.getElementById('out');
+function show(t){ out.textContent = t; out.scrollTop = 0; }
+async function hit(url, opts) {
+  try {
+    show('Loading… ' + url);
+    const r = await fetch(url, opts);
+    const text = await r.text();
+    try {
+      const json = JSON.parse(text);
+      show(JSON.stringify(json, null, 2));
+    } catch {
+      show(text);
+    }
+  } catch (e) {
+    show('ERROR: ' + (e.message || e));
+  }
+}
+
+document.getElementById('btnHealth').onclick   = () => hit('/api/health');
+document.getElementById('btnProducts').onclick = () => hit('/api/gafiw-products?fresh=1');
+document.getElementById('btnOtp').onclick      = () => hit('/api/gafiw-otp');
+document.getElementById('btnHistory').onclick  = () => hit('/api/gafiw-history?limit=5');
+document.getElementById('btnCount').onclick    = () => {
+  const p = document.getElementById('product').value.trim();
+  const l = document.getElementById('location').value.trim();
+  if(!p || !l) return show('กรุณากรอก product และ location');
+  hit(`/api/gafiw-otp-count?product=${encodeURIComponent(p)}&location=${encodeURIComponent(l)}`);
+};
+</script>
+</body>
+</html>
