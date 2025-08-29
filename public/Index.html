@@ -1,0 +1,16 @@
+<!doctype html><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AF Test</title>
+</head><body>
+<h1>AF Proxy OK</h1>
+<button id="p">ทดสอบ Products</button>
+<button id="o">ทดสอบ OTP</button>
+<pre id="out" style="white-space:pre-wrap"></pre>
+<script>
+async function hit(url){
+  const r = await fetch(url); const t = await r.text(); document.getElementById('out').textContent=t;
+}
+document.getElementById('p').onclick=()=>hit('/api/gafiw-products?fresh=1');
+document.getElementById('o').onclick=()=>hit('/api/gafiw-otp');
+</script>
+</body></html>
