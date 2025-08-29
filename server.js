@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
-const KEY  = process.env.GAFIW_API_KEY || ""; // ใช้กับ OTP/history
+const KEY  = process.env.GAFIW_API_KEY || ""; // <-- ใช้ตัวนี้ตัวเดียว
 
 app.use(cors());
 app.use(express.json());
