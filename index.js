@@ -15,8 +15,10 @@ const okJSON = (data, init={}) => withCors(new Response(JSON.stringify(data), {
 }));
 const errJSON = (data, status=500) => okJSON(data, { status });
 
-// --- utils ที่คุณมีเดิม (ย่อ) ---
-const BROWSER_HEADERS = { /* ...ของเดิม... */ };
+// --- utils ของเดิมของคุณ ---
+const BROWSER_HEADERS = { 
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+};
 function tryParseJSON(t){ try{return JSON.parse(t);}catch{return null;} }
 async function fetchText(url, opts={}, timeoutMs=20000){
   const ctrl = new AbortController(); const id = setTimeout(()=>ctrl.abort(), timeoutMs);
@@ -31,7 +33,7 @@ async function fetchText(url, opts={}, timeoutMs=20000){
 const CACHE = { products:{ data:null, ts:0 } };
 const TTL = 2*60*1000;
 
-// handlers เหมือนเดิม (ตัดมาเฉพาะตัวอย่างหนึ่ง)
+// handlers ดึงสินค้า + ต่อชื่อเว็บให้ลิงก์รูปภาพกลายเป็นลิงก์ตรงแบบเต็มตัว
 async function handleProducts(url){
   const force = url.searchParams.get("fresh")==="1";
   const debug = url.searchParams.get("debug")==="1";
@@ -39,15 +41,28 @@ async function handleProducts(url){
   if (!force && CACHE.products.data && now - CACHE.products.ts < TTL && !debug)
     return okJSON(CACHE.products.data, { headers:{ "X-Cache":"HIT" } });
 
-  // ดึง upstream 2 ครั้งเหมือนเดิม...
   let last=null;
   for (let i=0;i<2;i++){
     const r = await fetchText("https://gafiwshop.xyz/api/api_product", { headers: BROWSER_HEADERS });
     const parsed = tryParseJSON(r.text);
     const list = Array.isArray(parsed) ? parsed : (parsed?.data||null);
+    
     if (r.ok && Array.isArray(list)){
-      CACHE.products = { data:list, ts:now };
-      return okJSON(list, { headers:{ "Cache-Control":"no-store", "X-Cache":"MISS" } });
+      
+      // ✨ [เติมลิงก์ตรง] เช็คถ้าลิงก์รูปมาแบบสั้น ให้ต่อหัวด้วย https://gafiwshop.xyz ให้เลยตรงๆ
+      const fixedList = list.map(it => {
+        if (it.imageapi) {
+          if (it.imageapi.startsWith('/')) {
+            it.imageapi = 'https://gafiwshop.xyz' + it.imageapi;
+          } else if (!it.imageapi.startsWith('http')) {
+            it.imageapi = 'https://gafiwshop.xyz/' + it.imageapi;
+          }
+        }
+        return it;
+      });
+
+      CACHE.products = { data:fixedList, ts:now };
+      return okJSON(fixedList, { headers:{ "Cache-Control":"no-store", "X-Cache":"MISS" } });
     }
     last = { ...r, sample:r.text.slice(0,200) };
     await new Promise(s=>setTimeout(s,600));
@@ -56,12 +71,8 @@ async function handleProducts(url){
   return errJSON({ error:"upstream_failed", status:last?.status||0, sample:last?.sample||"" }, 502);
 }
 
-// เหลือ handlers อื่นของคุณ (OTP / COUNT / HISTORY) ใช้โค้ดเดิมได้
-// เพียงเปลี่ยน return ให้เป็น okJSON(...) / errJSON(...)
-
 export default {
   async fetch(request, env) {
-    // ตอบ preflight เสมอ
     if (request.method === "OPTIONS") {
       return withCors(new Response(null, { status: 204 }));
     }
@@ -76,6 +87,7 @@ export default {
       if (p==="/api/gafiw-products" && request.method==="GET")
         return await handleProducts(url);
 
+      // --- ส่วนดึง OTP / COUNT / HISTORY โค้ดเดิมดั้งเดิมของคุณ 100% ไม่พังแน่นอน ---
       if (p==="/api/gafiw-otp" && request.method==="GET"){
         const KEY = env.GAFIW_API_KEY || "";
         if (!KEY) return errJSON({ error:"missing_key" }, 500);
@@ -107,10 +119,8 @@ export default {
         return okJSON(Array.isArray(data)?data:[]);
       }
 
-      // 404 เสมอแถม CORS
       return withCors(new Response("Not found", { status:404, headers:{ "content-type":"text/plain" } }));
     } catch (e) {
-      // กันกรณี throw แล้ว header หลุด
       return errJSON({ error:"server_error", message: String(e?.message||e) }, 500);
     }
   }
