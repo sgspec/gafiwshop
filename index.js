@@ -15,10 +15,11 @@ const okJSON = (data, init={}) => withCors(new Response(JSON.stringify(data), {
 }));
 const errJSON = (data, status=500) => okJSON(data, { status });
 
-// --- utils ของเดิมของคุณ ---
+// แฮดเดอร์พื้นฐานสำหรับคุยกับ API สินค้า
 const BROWSER_HEADERS = { 
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 };
+
 function tryParseJSON(t){ try{return JSON.parse(t);}catch{return null;} }
 async function fetchText(url, opts={}, timeoutMs=20000){
   const ctrl = new AbortController(); const id = setTimeout(()=>ctrl.abort(), timeoutMs);
@@ -29,11 +30,10 @@ async function fetchText(url, opts={}, timeoutMs=20000){
   } finally { clearTimeout(id); }
 }
 
-// cache เหมือนเดิม
 const CACHE = { products:{ data:null, ts:0 } };
 const TTL = 2*60*1000;
 
-// handlers ดึงสินค้า + ต่อชื่อเว็บให้ลิงก์รูปภาพกลายเป็นลิงก์ตรงแบบเต็มตัว
+// ดึงสินค้า + แอบแปลงลิงก์รูปให้วิ่งผ่านตัวดาวน์โหลดใน Worker ของเรา
 async function handleProducts(url){
   const force = url.searchParams.get("fresh")==="1";
   const debug = url.searchParams.get("debug")==="1";
@@ -48,21 +48,16 @@ async function handleProducts(url){
     const list = Array.isArray(parsed) ? parsed : (parsed?.data||null);
     
     if (r.ok && Array.isArray(list)){
-      
-      // ✨ [เติมลิงก์ตรง] เช็คถ้าลิงก์รูปมาแบบสั้น ให้ต่อหัวด้วย https://gafiwshop.xyz ให้เลยตรงๆ
-      const fixedList = list.map(it => {
-        if (it.imageapi) {
-          if (it.imageapi.startsWith('/')) {
-            it.imageapi = 'https://gafiwshop.xyz' + it.imageapi;
-          } else if (!it.imageapi.startsWith('http')) {
-            it.imageapi = 'https://gafiwshop.xyz/' + it.imageapi;
-          }
+      // สแกนเจอรูปไหนที่อยู่บนเว็บ gafiwshop ให้แปลงลิงก์มาขอผ่านเซิร์ฟเวอร์เราแทน ส่วนรูป flaticon นอกเว็บปล่อยผ่านปกติ
+      const proxiedList = list.map(it => {
+        if (it.imageapi && it.imageapi.includes("gafiwshop.xyz")) {
+          it.imageapi = `${url.origin}/api/image-proxy?url=${encodeURIComponent(it.imageapi)}`;
         }
         return it;
       });
 
-      CACHE.products = { data:fixedList, ts:now };
-      return okJSON(fixedList, { headers:{ "Cache-Control":"no-store", "X-Cache":"MISS" } });
+      CACHE.products = { data:proxiedList, ts:now };
+      return okJSON(proxiedList, { headers:{ "Cache-Control":"no-store", "X-Cache":"MISS" } });
     }
     last = { ...r, sample:r.text.slice(0,200) };
     await new Promise(s=>setTimeout(s,600));
@@ -87,7 +82,31 @@ export default {
       if (p==="/api/gafiw-products" && request.method==="GET")
         return await handleProducts(url);
 
-      // --- ส่วนดึง OTP / COUNT / HISTORY โค้ดเดิมดั้งเดิมของคุณ 100% ไม่พังแน่นอน ---
+      // 🔥 [ห้องสอยรูปภาพ] แยกโซนทำงานชัดเจน แปลงร่างเป็นเบราว์เซอร์มนุษย์ไปสอยรูปมาให้หน้าเว็บพี่
+      if (p==="/api/image-proxy" && request.method==="GET") {
+        const targetUrl = url.searchParams.get("url");
+        if (!targetUrl) return errJSON({ error:"missing_url" }, 400);
+        try {
+          const imgRes = await fetch(targetUrl, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+              "Accept-Language": "th-TH,th;q=0.9,en;q=0.8",
+              "Referer": "https://gafiwshop.xyz/" // หลอกว่าเปิดดูรูปจากในเว็บหลักเขาเอง
+            }
+          });
+          if (!imgRes.ok) return new Response("Image Error", { status: imgRes.status });
+          const contentType = imgRes.headers.get("content-type") || "image/png";
+          return new Response(imgRes.body, {
+            status: 200,
+            headers: { "Content-Type": contentType, "Cache-Control": "public, max-age=86400", ...CORS }
+          });
+        } catch(e) {
+          return errJSON({ error:"proxy_failed", message: String(e) }, 500);
+        }
+      }
+
+      // --- 📌 โค้ดเดิมดั้งเดิมของพี่ทุกประการ โซนนี้ปลอดภัย 100% ---
       if (p==="/api/gafiw-otp" && request.method==="GET"){
         const KEY = env.GAFIW_API_KEY || "";
         if (!KEY) return errJSON({ error:"missing_key" }, 500);
